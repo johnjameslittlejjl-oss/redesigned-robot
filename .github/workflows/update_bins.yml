@@ -1,4 +1,4 @@
-name: Fetch Wakefield Bin Schedule
+name: Update Bin Schedule
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  scrape-bins:
+  update-json:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,20 +19,12 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install requests beautifulsoup4
-
-      - name: Run Scraper & Generate JSON
+      - name: Generate Bin JSON
         run: |
           python -c '
-          import datetime, json, requests
+          import datetime, json
 
-          # Wakefield Council Where I Live URL for your specific UPRN (15 Meadowcroft Road)
-          url = "https://www.wakefield.gov.uk/where-i-live?uprn=63073803&a=15%20Meadowcroft%20Road%20Outwood%20Wakefield%20WF1%203TA"
-          
-          # Fallback robust math engine calibrated to Wakefield fortnightly schedules if site blocks direct headless fetch
           today = datetime.date.today()
-          # Anchor reference date for alternate rotations in Wakefield
           anchor_date = datetime.date(2026, 1, 5) 
           weeks_diff = (today - anchor_date).days // 7
 
@@ -43,7 +35,6 @@ jobs:
               bin_name = "Mixed Recycling"
               bin_color = "Green Bin"
 
-          # Calculate next upcoming collection day (e.g., Friday)
           days_ahead = (4 - today.weekday()) % 7
           if days_ahead == 0: 
               days_ahead = 7
@@ -60,9 +51,9 @@ jobs:
               json.dump(data, f, indent=2)
           '
 
-      - name: Commit and push JSON
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add bins.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update bin schedule for Meadowcroft Rd" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update bin schedule" && git push)
