@@ -1,0 +1,66 @@
+name: Update Bin Schedule
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Runs every Monday at midnight UTC
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  update-json:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Generate Bin JSON
+        run: |
+          python -c '
+          import datetime, json
+
+          # Define your anchor reference date (A known Friday when Black/Brown bin was due)
+          # Change this to match a known collection week baseline
+          anchor_date = datetime.date(2026, 1, 2) 
+          today = datetime.date.today()
+
+          # Calculate week difference from anchor
+          days_diff = (today - anchor_date).days
+          weeks_diff = days_diff // 7
+
+          # Alternating check (Even week = Black/Brown, Odd = Green)
+          if weeks_diff % 2 == 0:
+              bin_type = "General & Garden"
+              bin_color = "Black & Brown Bin"
+          else:
+              bin_type = "Mixed Recycling"
+              bin_color = "Green Bin"
+
+          # Find next collection date (next coming Friday or your specific day)
+          days_ahead = 4 - today.weekday() # 4 is Friday (0=Mon, 4=Fri)
+          if days_ahead <= 0: 
+              days_ahead += 7
+          next_date = today + datetime.timedelta(days=days_ahead)
+          date_str = next_date.strftime("%A %d%b")
+
+          data = {
+              "bin": bin_type,
+              "color": bin_color,
+              "date": date_str
+          }
+
+          with open("bins.json", "w") as f:
+              json.dump(data, f, indent=2)
+          '
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add bins.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update bin schedule" && git push)
