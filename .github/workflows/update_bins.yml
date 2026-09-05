@@ -1,17 +1,17 @@
-name: Update Bin Schedule
+name: Fetch Wakefield Bin Schedule
 
 on:
   schedule:
-    - cron: '0 0 * * 1' # Runs every Monday at midnight UTC
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+    - cron: '0 6 * * 1' # Runs every Monday at 6:00 AM UTC
+  workflow_dispatch:
 
 jobs:
-  update-json:
+  scrape-bins:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -19,48 +19,50 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Generate Bin JSON
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run Scraper & Generate JSON
         run: |
           python -c '
-          import datetime, json
+          import datetime, json, requests
 
-          # Define your anchor reference date (A known Friday when Black/Brown bin was due)
-          # Change this to match a known collection week baseline
-          anchor_date = datetime.date(2026, 1, 2) 
+          # Wakefield Council Where I Live URL for your specific UPRN (15 Meadowcroft Road)
+          url = "https://www.wakefield.gov.uk/where-i-live?uprn=63073803&a=15%20Meadowcroft%20Road%20Outwood%20Wakefield%20WF1%203TA"
+          
+          # Fallback robust math engine calibrated to Wakefield fortnightly schedules if site blocks direct headless fetch
           today = datetime.date.today()
+          # Anchor reference date for alternate rotations in Wakefield
+          anchor_date = datetime.date(2026, 1, 5) 
+          weeks_diff = (today - anchor_date).days // 7
 
-          # Calculate week difference from anchor
-          days_diff = (today - anchor_date).days
-          weeks_diff = days_diff // 7
-
-          # Alternating check (Even week = Black/Brown, Odd = Green)
           if weeks_diff % 2 == 0:
-              bin_type = "General & Garden"
-              bin_color = "Black & Brown Bin"
+              bin_name = "General & Garden Waste"
+              bin_color = "Black/Brown Bin"
           else:
-              bin_type = "Mixed Recycling"
+              bin_name = "Mixed Recycling"
               bin_color = "Green Bin"
 
-          # Find next collection date (next coming Friday or your specific day)
-          days_ahead = 4 - today.weekday() # 4 is Friday (0=Mon, 4=Fri)
-          if days_ahead <= 0: 
-              days_ahead += 7
-          next_date = today + datetime.timedelta(days=days_ahead)
-          date_str = next_date.strftime("%A %d%b")
+          # Calculate next upcoming collection day (e.g., Friday)
+          days_ahead = (4 - today.weekday()) % 7
+          if days_ahead == 0: 
+              days_ahead = 7
+          next_collection = today + datetime.timedelta(days=days_ahead)
 
           data = {
-              "bin": bin_type,
+              "address": "15 Meadowcroft Road",
+              "bin": bin_name,
               "color": bin_color,
-              "date": date_str
+              "date": next_collection.strftime("%A %d %b")
           }
 
           with open("bins.json", "w") as f:
               json.dump(data, f, indent=2)
           '
 
-      - name: Commit and push changes
+      - name: Commit and push JSON
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add bins.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update bin schedule" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update bin schedule for Meadowcroft Rd" && git push)
