@@ -2,7 +2,7 @@ name: Live Wakefield Council Bin Schedule
 
 on:
   schedule:
-    - cron: '0 6 * * *' # Runs automatically every day at 6:00 AM UTC
+    - cron: '0 6 * * *' # Runs automatically daily at 06:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -21,78 +21,119 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4 lxml dateparser
+          pip install requests beautifulsoup4 lxml
 
-      - name: Scrape Wakefield Council UPRN 63073803
+      - name: Scrape Wakefield Council
         run: |
           python -c '
           import requests
           from bs4 import BeautifulSoup
           import datetime, re, json
+          from collections import defaultdict
 
-          uprn = "63073803"
-          url = f"https://www.wakefield.gov.uk/where-i-live?uprn={uprn}"
+          url = "https://www.wakefield.gov.uk/where-i-live?uprn=63073803&a=15%20Meadowcroft%20Road%20Outwood%20Wakefield%20WF1%203TA&usrn=41802624&e=433795&n=424258&p=WF1%203TA"
           headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           }
 
-          try:
-              resp = requests.get(url, headers=headers, timeout=15)
-              soup = BeautifulSoup(resp.text, "lxml")
+          resp = requests.get(url, headers=headers, timeout=20)
+          soup = BeautifulSoup(resp.text, "lxml")
 
-              upcoming_collections = []
-              today = datetime.date.today()
+          date_to_bins = defaultdict(set)
+          today = datetime.date.today()
 
-              for block in soup.find_all(["div", "li", "section"]):
-                  block_text = block.get_text(" ", strip=True)
-                  
-                  bin_type = None
-                  if "Household waste" in block_text:
-                      bin_type = "General Waste"
-                  elif "Mixed recycling" in block_text:
-                      bin_type = "Mixed Recycling"
-                  elif "Garden waste" in block_text:
-                      bin_type = "Garden Waste"
+          # Date pattern matching Wakefield format: "Friday, 18 September 2026"
+          date_pattern = re.compile(r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b")
 
-                  if bin_type:
-                      match = re.search(r"(\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})", block_text)
-                      if match:
-                          date_str = match.group(1)
+          # Walk through sections / headings on the Wakefield "Where I Live" page
+          for header_tag in soup.find_all(["h2", "h3", "h4", "strong", "p"]):
+              text = header_tag.get_text(" ", strip=True).lower()
+              bin_category = None
+              
+              if "household waste" in text:
+                  bin_category = "General Waste"
+              elif "garden waste" in text:
+                  bin_category = "Garden Waste"
+              elif "mixed recycling" in text:
+                  bin_category = "Mixed Recycling"
+
+              if bin_category:
+                  # Traverse following sibling elements for dates listed under this service
+                  curr = header_tag.find_next_sibling()
+                  while curr and curr.name not in ["h2", "h3", "h4"]:
+                      block_text = curr.get_text(" ", strip=True)
+                      for match in date_pattern.finditer(block_text):
+                          d_str = f"{match.group(1)}, {match.group(2)} {match.group(3)} {match.group(4)}"
                           try:
-                              parsed_date = datetime.datetime.strptime(date_str, "%A, %d %B %Y").date()
-                              if parsed_date >= today:
-                                  upcoming_collections.append({
-                                      "bin": bin_type,
-                                      "date_obj": parsed_date,
-                                      "date": parsed_date.strftime("%A %d %b")
-                                  })
+                              d_obj = datetime.datetime.strptime(d_str, "%A, %d %B %Y").date()
+                              if d_obj >= today:
+                                  date_to_bins[d_obj].add(bin_category)
+                          except ValueError:
+                              pass
+                      curr = curr.find_next_sibling()
+
+          if not date_to_bins:
+              # Broad scan fallback if HTML structure changes
+              page_text = soup.get_text("\n")
+              for line in page_text.splitlines():
+                  line_lower = line.lower()
+                  cat = None
+                  if "household waste" in line_lower:
+                      cat = "General Waste"
+                  elif "garden waste" in line_lower:
+                      cat = "Garden Waste"
+                  elif "mixed recycling" in line_lower:
+                      cat = "Mixed Recycling"
+                  
+                  if cat:
+                      m = date_pattern.search(line)
+                      if m:
+                          d_str = f"{m.group(1)}, {m.group(2)} {m.group(3)} {m.group(4)}"
+                          try:
+                              d_obj = datetime.datetime.strptime(d_str, "%A, %d %B %Y").date()
+                              if d_obj >= today:
+                                  date_to_bins[d_obj].add(cat)
                           except ValueError:
                               pass
 
-              upcoming_collections.sort(key=lambda x: x["date_obj"])
+          if not date_to_bins:
+              raise RuntimeError("Scraper could not locate any upcoming collection dates.")
 
-              if upcoming_collections:
-                  next_item = upcoming_collections[0]
-                  data = {
-                      "address": "15 Meadowcroft Road",
-                      "uprn": uprn,
-                      "bin": next_item["bin"],
-                      "date": next_item["date"]
-                  }
-              else:
-                  raise Exception("No future bin dates found in scrape")
+          # Pick the closest upcoming collection date
+          next_date = min(date_to_bins.keys())
+          collected_bins = date_to_bins[next_date]
 
-          except Exception as e:
-              print(f"Scrape warning ({e}), falling back to safe default")
-              data = {
-                  "address": "15 Meadowcroft Road",
-                  "uprn": uprn,
-                  "bin": "General Waste",
-                  "date": (datetime.date.today() + datetime.timedelta(days=7)).strftime("%A %d %b")
-              }
+          # Consolidate bin names
+          if "General Waste" in collected_bins and "Garden Waste" in collected_bins:
+              display_bin = "General & Garden"
+          elif "General Waste" in collected_bins:
+              display_bin = "General Waste"
+          elif "Garden Waste" in collected_bins:
+              display_bin = "Garden Waste"
+          elif "Mixed Recycling" in collected_bins:
+              display_bin = "Mixed Recycling"
+          else:
+              display_bin = " / ".join(sorted(collected_bins))
 
+          # Format date string with suffix: Fri 18th Sep
+          day_num = next_date.day
+          if 11 <= day_num <= 13:
+              suffix = "th"
+          else:
+              suffix = {1: "st", 2: "nd", 3: "rd"}.get(day_num % 10, "th")
+
+          formatted_date = f"{next_date.strftime(\"%a\")} {day_num}{suffix} {next_date.strftime(\"%b\")}"
+
+          payload = {
+              "address": "15 Meadowcroft Road",
+              "uprn": "63073803",
+              "bin": display_bin,
+              "date": formatted_date
+          }
+
+          print("Generated payload:", payload)
           with open("bins.json", "w") as f:
-              json.dump(data, f, indent=2)
+              json.dump(payload, f, indent=2)
           '
 
       - name: Commit and push changes
