@@ -28,7 +28,7 @@ jobs:
           python -c '
           import requests
           from bs4 import BeautifulSoup
-          import datetime, re
+          import datetime, re, json
 
           uprn = "63073803"
           url = f"https://www.wakefield.gov.uk/where-i-live?uprn={uprn}"
@@ -40,15 +40,12 @@ jobs:
               resp = requests.get(url, headers=headers, timeout=15)
               soup = BeautifulSoup(resp.text, "lxml")
 
-              # Parse Wakefield Council page for upcoming collection dates and bin types
               upcoming_collections = []
               today = datetime.date.today()
 
-              # Target the bin collection sections on Wakefield Council Where I Live page
               for block in soup.find_all(["div", "li", "section"]):
                   block_text = block.get_text(" ", strip=True)
                   
-                  # Look for bin categories
                   bin_type = None
                   if "Household waste" in block_text:
                       bin_type = "General Waste"
@@ -58,7 +55,6 @@ jobs:
                       bin_type = "Garden Waste"
 
                   if bin_type:
-                      # Search for date patterns like "Wednesday, 23 September 2026" or "Friday 18 Sep"
                       match = re.search(r"(\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})", block_text)
                       if match:
                           date_str = match.group(1)
@@ -73,7 +69,6 @@ jobs:
                           except ValueError:
                               pass
 
-              # Sort by nearest upcoming date
               upcoming_collections.sort(key=lambda x: x["date_obj"])
 
               if upcoming_collections:
