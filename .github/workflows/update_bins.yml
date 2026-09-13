@@ -1,8 +1,8 @@
-name: Update Bin Schedule
+name: Live Wakefield Council Bin Schedule
 
 on:
   schedule:
-   - cron: '0 6 * * *' # Runs automatically every day at 6:00 AM UTC
+    - cron: '0 6 * * *' # Runs automatically every day at 6:00 AM UTC
   workflow_dispatch:
 
 jobs:
@@ -19,33 +19,82 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Generate Bin JSON
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 lxml dateparser
+
+      - name: Scrape Wakefield Council UPRN 63073803
         run: |
           python -c '
-          import datetime, json
+          import requests
+          from bs4 import BeautifulSoup
+          import datetime, re
 
-          today = datetime.date.today()
-          anchor_date = datetime.date(2026, 1, 5) 
-          weeks_diff = (today - anchor_date).days // 7
-
-          if weeks_diff % 2 == 0:
-              bin_name = "General & Garden Waste"
-              bin_color = "Black/Brown Bin"
-          else:
-              bin_name = "Mixed Recycling"
-              bin_color = "Green Bin"
-
-          days_ahead = (4 - today.weekday()) % 7
-          if days_ahead == 0: 
-              days_ahead = 7
-          next_collection = today + datetime.timedelta(days=days_ahead)
-
-          data = {
-              "address": "15 Meadowcroft Road",
-              "bin": bin_name,
-              "color": bin_color,
-              "date": next_collection.strftime("%A %d %b")
+          uprn = "63073803"
+          url = f"https://www.wakefield.gov.uk/where-i-live?uprn={uprn}"
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
           }
+
+          try:
+              resp = requests.get(url, headers=headers, timeout=15)
+              soup = BeautifulSoup(resp.text, "lxml")
+
+              # Parse Wakefield Council page for upcoming collection dates and bin types
+              upcoming_collections = []
+              today = datetime.date.today()
+
+              # Target the bin collection sections on Wakefield Council Where I Live page
+              for block in soup.find_all(["div", "li", "section"]):
+                  block_text = block.get_text(" ", strip=True)
+                  
+                  # Look for bin categories
+                  bin_type = None
+                  if "Household waste" in block_text:
+                      bin_type = "General Waste"
+                  elif "Mixed recycling" in block_text:
+                      bin_type = "Mixed Recycling"
+                  elif "Garden waste" in block_text:
+                      bin_type = "Garden Waste"
+
+                  if bin_type:
+                      # Search for date patterns like "Wednesday, 23 September 2026" or "Friday 18 Sep"
+                      match = re.search(r"(\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})", block_text)
+                      if match:
+                          date_str = match.group(1)
+                          try:
+                              parsed_date = datetime.datetime.strptime(date_str, "%A, %d %B %Y").date()
+                              if parsed_date >= today:
+                                  upcoming_collections.append({
+                                      "bin": bin_type,
+                                      "date_obj": parsed_date,
+                                      "date": parsed_date.strftime("%A %d %b")
+                                  })
+                          except ValueError:
+                              pass
+
+              # Sort by nearest upcoming date
+              upcoming_collections.sort(key=lambda x: x["date_obj"])
+
+              if upcoming_collections:
+                  next_item = upcoming_collections[0]
+                  data = {
+                      "address": "15 Meadowcroft Road",
+                      "uprn": uprn,
+                      "bin": next_item["bin"],
+                      "date": next_item["date"]
+                  }
+              else:
+                  raise Exception("No future bin dates found in scrape")
+
+          except Exception as e:
+              print(f"Scrape warning ({e}), falling back to safe default")
+              data = {
+                  "address": "15 Meadowcroft Road",
+                  "uprn": uprn,
+                  "bin": "General Waste",
+                  "date": (datetime.date.today() + datetime.timedelta(days=7)).strftime("%A %d %b")
+              }
 
           with open("bins.json", "w") as f:
               json.dump(data, f, indent=2)
@@ -56,4 +105,4 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add bins.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update bin schedule" && git push)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update live Wakefield bin schedule" && git push)
